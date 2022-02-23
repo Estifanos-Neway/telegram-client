@@ -1,6 +1,6 @@
 import { Airgram, Auth, prompt } from 'airgram';
 import 'dotenv/config';
-import { getGroups, transferMembers } from "./modules/api_methods.js";
+import { getGroups, logOut, transferMembers } from "./modules/api_methods.js";
 
 //-> local variables
 let thisUserName, thisUserPhone, thisUserId;
@@ -24,10 +24,30 @@ airgram.api.getMe().then((me) => {
     console.log(`Hey ${thisUserName}, (Phone: +${thisUserPhone} | Id: ${thisUserId}).`);
 })
 
-getGroups(airgram).then(result => {
-    // console.log(result[1]);
-    transferMembers(airgram, 1458890556, -1001726244201).then(result => {
-        console.log(result);
+getGroups(airgram).then(async result => {
+    // if (!result[0]) {
+    //     console.log(result);
+    // } else {
+    //     result[1].forEach(async group => {
+    //         group = await group;
+    //         console.log(group)
+    //     });
+    // }
+    
+    for await (let transferMembersYield of transferMembers(airgram, 1263229876, -1001726244201,10)){
+        if(!transferMembersYield[0]){
+            console.log(transferMembersYield[1]);
+        } else{
+            console.log(" ")
+            console.log(new Date());
+            console.log(" ")
+            console.log(`${transferMembersYield[1].addsCount} | ${transferMembersYield[1].totalAddsCount}`);
+            console.log("failed: ");
+            for (let failedAdd of transferMembersYield[1].failedAdds){
+                console.log(failedAdd.reason);
+            }
+        }
+        // console.log(transferMembersYield[0],transferMembersYield[1]);
     }
-    )
 })
+// logOut(airgram).then(r=>console.log(r));

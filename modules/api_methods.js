@@ -2,6 +2,18 @@
 import { maxChatLimit, defaultGroupsFolderTitle, defaultGroupsFolderIconTitle } from "../variables.js"
 
 //-> basic methods
+async function getChat(airgramInstance, chatId) {
+    try {
+        let result = await airgramInstance.api.getChat({ chatId });
+        if (result._ == "error" || result.response._ == "error") {
+            return [false, result.response];
+        }
+        return [true, result.response];
+    } catch (error) {
+        return [false, error]
+    }
+}
+
 async function getChats(airgramInstance, chatList = null, limit = maxChatLimit) {
     try {
         let result = await airgramInstance.api.getChats({ chatList, limit });
@@ -14,6 +26,37 @@ async function getChats(airgramInstance, chatList = null, limit = maxChatLimit) 
     }
 }
 
+async function* getSupergroupMembers(airgramInstance, supergroupId, maxCount, offset = 0, defaultLimit = 200, filter = null) {
+    let limit = defaultLimit;
+    let errorFlag, members;
+    let count = 0;
+    while (!maxCount || count < maxCount) {
+        if (maxCount && count + limit > maxCount) {
+            limit = maxCount - count;
+        }
+        try {
+            let supergroupMembersResult = await airgramInstance.api.getSupergroupMembers({ supergroupId, filter, offset, limit });
+            if (supergroupMembersResult._ == "error" || supergroupMembersResult.response._ == "error") {
+                errorFlag = result;
+                break;
+            }
+            members = supergroupMembersResult.response.members;
+            if (members == []) {
+                break;
+            } else {
+                yield [true, members];
+                offset += limit;
+                count += limit;
+            }
+        } catch (error) {
+            errorFlag = error;
+            break;
+        }
+    }
+    if (errorFlag) {
+        yield [false, errorFlag];
+    }
+}
 //->-> authentications
 async function logOut(airgramInstance) {
     try {
@@ -28,18 +71,6 @@ async function logOut(airgramInstance) {
 }
 
 //-> derived methods
-async function getDetailedChat(airgramInstance, chatId) {
-    try {
-        let result = await airgramInstance.api.getChat({ chatId });
-        if (result._ == "error" || result.response._ == "error") {
-            return [false, result.response];
-        }
-        return [true, result.response];
-    } catch (error) {
-        return [false, error]
-    }
-}
-
 async function getGroups(airgramInstance, limit = maxChatLimit) {
     let params = {
         filter: {
@@ -64,10 +95,11 @@ async function getGroups(airgramInstance, limit = maxChatLimit) {
             return groups;
         }
         let groupsInfo = groups[1].response.chatIds;
+
         groupsInfo = groupsInfo.map(async groupId => {
             let fullGroupInfo = {};
             fullGroupInfo.id = groupId;
-            let groupDetail = await getDetailedChat(airgramInstance, groupId);
+            let groupDetail = await getChat(airgramInstance, groupId);
             if (!groupDetail[0]) {
                 fullGroupInfo.error = groupDetail[1];
                 return [false, fullGroupInfo];
@@ -77,27 +109,51 @@ async function getGroups(airgramInstance, limit = maxChatLimit) {
             fullGroupInfo.canInviteUsers = groupDetail[1].permissions.canInviteUsers;
             return [true, fullGroupInfo];
         });
-        groupsInfo = await Promise.all(groupsInfo);
         return [true, groupsInfo];
     } catch (error) {
         return [false, error];
     }
 }
 
-async function transferMembers(airgramInstance, from, to, limit) {
-    try {
-        let supergroupMembersResult = await airgramInstance.api.getSupergroupMembers({supergroupId:from,filter:null,offset:0,limit:100});
-        if (supergroupMembersResult._ == "error" || supergroupMembersResult.response._ == "error") {
-            return [false, supergroupMembersResult];
+async function addChatMembers(airgramInstance, to, userIds, maxAdds, forwardLimit = 0) {
+    let addsCount = 0;
+    let result = [];
+    for (let userId of userIds) {
+        try {
+            let addMemberResult = await airgramInstance.api.addChatMember({ chatId: to, userId, forwardLimit });
+            if (addMemberResult._ == "error" || addMemberResult.response._ == "error") {
+                result.push({ _: false, userId, reason: addMemberResult.response })
+            } else {
+                result.push({ _: true, userId })
+                addsCount++;
+                if (addsCount >= maxAdds) break;
+            }
+        } catch (error) {
+            result.push({ _: false, userId, reason: error })
         }
-        let userIds = supergroupMembersResult.response.members.map(member => member.memberId.userId);
-        let addMembersResult = await airgramInstance.api.addChatMembers({chatId:to,userIds});
-        if (addMembersResult._ == "error" || addMembersResult.response._ == "error") {
-            return [false, addMembersResult];
+    }
+    return result;
+}
+
+async function* transferMembers(airgramInstance, from, to, maxAdds) {
+    let totalAddsCount = 0;
+    let errorFlag;
+    for await (let members of getSupergroupMembers(airgramInstance, from, 100, 1000)) {
+        if (!members[0]) {
+            errorFlag = members[1];
+            break;
         }
-        return [true, addMembersResult];
-    } catch (error) {
-        return [false, error]
+        let userIds = members[1].map(member => member.memberId.userId);
+        let addMembersResult = await addChatMembers(airgramInstance, to, userIds, maxAdds - totalAddsCount);
+        let addsCount = addMembersResult.filter(result => result._).length;
+        let failedAdds = addMembersResult.filter(result => !result._);
+        totalAddsCount += addsCount;
+        yield [true, { totalAddsCount, addsCount, failedAdds }];
+        if (totalAddsCount >= maxAdds) break;
+    }
+
+    if (errorFlag) {
+        yield [false, errorFlag];
     }
 }
 
